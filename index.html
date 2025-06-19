@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ứng Dụng Truyền File Chữ Ký Số</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Roboto', sans-serif; margin: 0; padding: 20px; background: linear-gradient(to bottom, #B0E1FA, #E8BDDB); color: #333; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #0056b3; }
+        fieldset { border: 2px solid #0056b3; border-radius: 5px; padding: 15px; margin-bottom: 20px; }
+        legend { font-weight: bold; color: #0056b3; }
+        .form-group { margin-bottom: 15px; display: flex; align-items: center; }
+        .form-group label { flex: 0 0 150px; margin-right: 10px; text-align: right; }
+        .form-group input[type="text"], .form-group input[type="number"], .form-group input[type="file"] { flex: 1; padding: 10px; border: 2px solid #ccc; border-radius: 4px; transition: border 0.3s; }
+        .form-group input[type="text"]:focus, .form-group input[type="number"]:focus { border-color: #0056b3; }
+        .form-group button { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 10px; transition: background 0.3s; }
+        .form-group button:hover { background-color: #0056b3; }
+        .log-output { background-color: #e9e9e9; border: 1px solid #ccc; padding: 10px; max-height: 200px; overflow-y: auto; border-radius: 4px; font-family: monospace; font-size: 0.9em; white-space: pre-wrap; word-wrap: break-word; }
+        .status-message { padding: 10px; margin-bottom: 10px; border-radius: 4px; }
+        .status-info { background-color: #e0f7fa; border: 1px solid #b2ebf2; color: #00796b; }
+        .status-success { background-color: #e8f5e9; border: 1px solid #c8e6c9; color: #388e3c; }
+        .status-warning { background-color: #fffde7; border: 1px solid #fff59d; color: #fbc02d; }
+        .status-error { background-color: #ffebee; border: 1px solid #ffcdd2; color: #d32f2f; }
+        .recipient-entry { display: flex; gap: 10px; margin-bottom: 10px; }
+        .recipient-entry input { flex: 1; padding: 5px; border-radius: 4px; border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Ứng Dụng Truyền File Chữ Ký Số</h1>
+
+        <fieldset>
+            <legend>Thông Tin Server</legend>
+            <div class="form-group">
+                <label for="serverIp">IP Server:</label>
+                <input type="text" id="serverIp" value="0.0.0.0">
+            </div>
+            <div class="form-group">
+                <label for="serverPort">Cổng:</label>
+                <input type="number" id="serverPort" value="8889">
+            </div>
+            <div class="form-group">
+                <button id="startServerBtn">Kết Nối (Bắt Đầu Server)</button>
+                <button id="stopServerBtn" disabled>Ngắt Kết Nối (Dừng Server)</button>
+            </div>
+            <div id="serverStatus" class="status-message status-info">Trạng Thái Server: Chưa chạy</div>
+        </fieldset>
+
+        <fieldset>
+            <legend>Thông Tin Người Nhận (Client)</legend>
+            <div id="recipientsContainer">
+                <div class="recipient-entry">
+                    <input type="text" placeholder="IP Người Nhận" class="recipient-ip" value="127.0.0.1">
+                    <input type="number" placeholder="Port" class="recipient-port" value="8889">
+                    <button onclick="removeRecipient(this)">Xoá</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label></label>
+                <button onclick="addRecipient()">+ Thêm Người Nhận</button>
+            </div>
+            <div class="form-group">
+                <label for="fileInput">Chọn File:</label>
+                <input type="file" id="fileInput">
+            </div>
+            <div class="form-group">
+                <button id="sendFileBtn">Gửi File</button>
+            </div>
+            <div id="clientStatus" class="status-message status-info">Trạng Thái Client: Sẵn Sàng</div>
+        </fieldset>
+
+        <fieldset>
+            <legend>Cài Đặt Ứng Dụng</legend>
+            <div class="form-group">
+                <label for="segmentSize">Kích Thước Phân Đoạn (Bytes):</label>
+                <input type="number" id="segmentSize" value="65536">
+            </div>
+            <div class="form-group">
+                <button id="applySettingsBtn">Áp Dụng Cài Đặt</button>
+            </div>
+        </fieldset>
+
+        <fieldset>
+            <legend>Log Output</legend>
+            <div id="logOutput" class="log-output"></div>
+        </fieldset>
+    </div>
+
+    <script>
+        const socket = io();
+
+        const startServerBtn = document.getElementById('startServerBtn');
+        const stopServerBtn = document.getElementById('stopServerBtn');
+        const serverStatusDiv = document.getElementById('serverStatus');
+
+        const fileInput = document.getElementById('fileInput');
+        const sendFileBtn = document.getElementById('sendFileBtn');
+        const clientStatusDiv = document.getElementById('clientStatus');
+        const segmentSizeInput = document.getElementById('segmentSize');
+        const applySettingsBtn = document.getElementById('applySettingsBtn');
+        const logOutputDiv = document.getElementById('logOutput');
+
+        socket.on('connect', () => {
+            logMessage('Kết nối đến server Flask-SocketIO thành công.');
+        });
+
+        socket.on('log_message', msg => {
+            logMessage(msg);
+        });
+
+        socket.on('server_status', data => {
+            updateStatus(serverStatusDiv, data.message, data.type);
+            startServerBtn.disabled = data.type === 'info' && data.message.includes('Server started');
+            stopServerBtn.disabled = !startServerBtn.disabled;
+        });
+
+        socket.on('client_status', data => {
+            updateStatus(clientStatusDiv, data.message, data.type);
+        });
+
+        startServerBtn.addEventListener('click', () => {
+            const ip = document.getElementById('serverIp').value;
+            const port = parseInt(document.getElementById('serverPort').value);
+            if (!ip || isNaN(port)) {
+                alert("Vui lòng nhập IP và Port hợp lệ cho server.");
+                return;
+            }
+            socket.emit('start_server', { ip, port });
+        });
+
+        stopServerBtn.addEventListener('click', () => {
+            socket.emit('stop_server');
+        });
+
+        sendFileBtn.addEventListener('click', () => {
+            const segmentSize = parseInt(segmentSizeInput.value);
+            const file = fileInput.files[0];
+            if (!file) {
+                alert("Vui lòng chọn một file.");
+                return;
+            }
+
+            if (isNaN(segmentSize) || segmentSize <= 0) {
+                alert("Kích thước phân đoạn không hợp lệ.");
+                return;
+            }
+
+            const recipients = document.querySelectorAll('.recipient-entry');
+            if (recipients.length === 0) {
+                alert("Vui lòng thêm ít nhất một người nhận.");
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = event => {
+                const fileData = new Uint8Array(event.target.result);
+                recipients.forEach(entry => {
+                    const ip = entry.querySelector('.recipient-ip').value;
+                    const port = parseInt(entry.querySelector('.recipient-port').value);
+                    if (!ip || isNaN(port)) {
+                        logMessage(`⚠️ Bỏ qua người nhận với IP/Port không hợp lệ.`);
+                        return;
+                    }
+
+                    socket.emit('send_file', {
+                        ip, port,
+                        file_name: file.name,
+                        file_data: fileData,
+                        segment_size: segmentSize
+                    });
+
+                    logMessage(`📤 Đang gửi file tới ${ip}:${port}`);
+                });
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        applySettingsBtn.addEventListener('click', () => {
+            try {
+                const segmentSize = parseInt(segmentSizeInput.value);
+                if (isNaN(segmentSize) || segmentSize <= 0) {
+                    alert("Kích thước phân đoạn phải là số dương.");
+                    return;
+                }
+                logMessage(`✅ Cài đặt áp dụng: Phân đoạn = ${segmentSize} bytes`);
+                alert("Đã áp dụng cài đặt.");
+            } catch (e) {
+                alert(`Lỗi khi áp dụng cài đặt: ${e.message}`);
+                logMessage(`❌ Error: ${e.message}`);
+            }
+        });
+
+        function logMessage(message) {
+            const now = new Date();
+            const timestamp = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+            logOutputDiv.innerHTML += `[${timestamp}] ${message}\n`;
+            logOutputDiv.scrollTop = logOutputDiv.scrollHeight;
+        }
+
+        function updateStatus(div, message, type) {
+            div.textContent = message;
+            div.className = `status-message status-${type}`;
+        }
+
+        // Thêm / Xoá người nhận
+        function addRecipient() {
+            const container = document.getElementById('recipientsContainer');
+            const div = document.createElement('div');
+            div.className = 'recipient-entry';
+            div.innerHTML = `
+                <input type="text" placeholder="IP Người Nhận" class="recipient-ip" value="127.0.0.1">
+                <input type="number" placeholder="Port" class="recipient-port" value="8889">
+                <button onclick="removeRecipient(this)">Xoá</button>
+            `;
+            container.appendChild(div);
+        }
+
+        function removeRecipient(btn) {
+            const entry = btn.closest('.recipient-entry');
+            entry.remove();
+        }
+
+        window.onload = function() {
+            startServerBtn.disabled = false;
+            stopServerBtn.disabled = true;
+            sendFileBtn.disabled = false;
+        };
+    </script> 
+</body>
+</html>
